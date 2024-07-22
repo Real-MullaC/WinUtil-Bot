@@ -1,8 +1,11 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import os
-from dotenv import load_dotenv
 import aiohttp
+import json
+import Functions.Discord.embed as EmbedBuilder
+from dotenv import load_dotenv
+import asyncio
 
 # Load environment variables from .env file
 load_dotenv()
@@ -10,16 +13,80 @@ load_dotenv()
 # Load environment variables
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 GUILD_ID = int(os.getenv('DISCORD_GUILD_ID'))
-GITHUB_REPO_OWNER = 'ChrisTitusTech'
-GITHUB_REPO_NAME = 'WinUtil'
 CONTRIBUTOR_ROLE_ID = int(os.getenv('CONTRIBUTOR_ROLE_ID'))
-ADMIN_ROLE_ID = int(os.getenv('ADMIN_ROLE_ID'))
 WEB_SERVER_URL = os.getenv('WEB_SERVER_URL')
-AUTHORIZATION_URL = 'https://discord.com/oauth2/authorize?client_id=1264587568117448811&response_type=code&redirect_uri=http%3A%2F%2Fbotworks.callums.live%2Fapi%2Foauth2%2Fcallback&scope=identify+connections'
+CHECK_INTERVAL = 10  # Time in seconds to wait between checks
+ADMIN_ROLE_ID = os.getenv('ADMIN_ROLE_ID')
+
+AUTHORIZATION_URL = "https://discord.com/oauth2/authorize?client_id=1264587568117448811&response_type=code&redirect_uri=http%3A%2F%2Fbotworks.callums.live%2Fapi%2Foauth2%2Fcallback&scope=identify+connections"
 
 # Initialize bot with all intents enabled
 intents = discord.Intents().all()
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Function to fetch user records from the web server
+async def fetch_user_records():
+    url = f"{WEB_SERVER_URL}/api/user_records"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data
+                else:
+                    print(f"Failed to fetch user records. HTTP Status: {response.status}")
+                    return {}
+        except Exception as e:
+            print(f"An error occurred while fetching user records: {e}")
+            return {}
+
+# Function to update user roles based on records
+async def update_user_roles():
+    user_records = await fetch_user_records()  # Fetch user records from the web server
+    for guild in bot.guilds:
+        if guild.id == GUILD_ID:
+            for member in guild.members:
+                await asyncio.sleep(delay=2)
+                if not member.bot:
+                    user_record = user_records.get(str(member.id))
+                    if user_record:
+                        new_nickname = user_record.get('github_username')
+                        try:
+                            await member.edit(nick=new_nickname)
+                            print(f"Updated nickname of {member.name} to {new_nickname} [TEMPORARY]")
+                        except Exception as e:
+                            print(f"An unexpected error occurred while updating {member.name}: {e}")
+
+                        if user_record.get('contributor') and user_record.get('contributor') == True:
+                            try:
+                                role = discord.utils.get(guild.roles, id=CONTRIBUTOR_ROLE_ID)
+                                if role:
+                                    if role not in member.roles:
+                                        await member.add_roles(role)
+                                        # Only print message if the role was added
+                                        print(f"Added 'Contributor' role to {member.name}")
+                            except discord.Forbidden:
+                                print(f"Permission error while updating {member.name}.")
+                            except discord.HTTPException as e:
+                                print(f"HTTP error occurred while updating {member.name}: {e}")
+                            except Exception as e:
+                                print(f"An unexpected error occurred while updating {member.name}: {e}")
+
+# Command to manually update roles
+@bot.command(name='update_roles')
+@commands.has_role(ADMIN_ROLE_ID)  # Ensure only users with the admin role can run this command
+async def update_roles(ctx):
+    await ctx.send("Starting the role update process...")
+    try:
+        await update_user_roles()
+        await ctx.send("Role update process completed.")
+    except Exception as e:
+        await ctx.send(f"An error occurred: {e}")
+
+# Periodically check for updates
+@tasks.loop(seconds=CHECK_INTERVAL)
+async def periodic_check():
+    await update_user_roles()
 
 # Event when a user joins the server
 @bot.event
@@ -29,90 +96,42 @@ async def on_member_join(member):
 
     print(f"New member joined: {member.name}")
 
+
+    embed = EmbedBuilder.DefaultEmbed(title="Github Linking", description="Are you a contributor? Link your github account to get your role! ")
+    view = discord.ui.View()
+    button = discord.ui.Button(label="Link", style=discord.ButtonStyle.link, url=AUTHORIZATION_URL)
+    view.add_item(button)
+
     # Send DM to new member asking them to link their GitHub account
     try:
-        await member.send(
-            f"Welcome to the server, {member.name}! Please link your GitHub account to get the Contributor role. "
-            f"Click this link to authorize: {AUTHORIZATION_URL}"
-        )
+        
+        await member.send(embed = embed, view = view)
         print(f"DM sent to {member.name}")
     except discord.Forbidden:
         print(f"Failed to DM {member.name}. They may have DMs disabled.")
-
-async def fetch_github_username(member):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{WEB_SERVER_URL}/api/github/username/{member.id}") as response:
-            if response.status == 200:
-                data = await response.json()
-                return data.get('github_username')
-            else:
-                print(f"Failed to fetch GitHub username for {member.name}. HTTP Status: {response.status}")
-                return None
-
-async def check_github_contributor(github_username):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contributors") as response:
-            if response.status == 200:
-                contributors = await response.json()
-                return any(contributor['login'] == github_username for contributor in contributors)
-            else:
-                print(f"Failed to check GitHub contributors. HTTP Status: {response.status}")
-                return False
-
-async def handle_contributor(member, github_username):
-    try:
-        await member.send(f"Your Discord username has been updated to {github_username} and you have been given the Contributor role.")
-        await member.edit(nick=github_username)
-        
-        role = discord.utils.get(member.guild.roles, id=CONTRIBUTOR_ROLE_ID)
-        if role:
-            await member.add_roles(role)
-        else:
-            print(f"Contributor role with ID {CONTRIBUTOR_ROLE_ID} not found.")
-    except discord.Forbidden:
-        print(f"Failed to DM {member.name}. They may have DMs disabled.")
     except Exception as e:
-        print(f"Failed to handle contributor for {member.name}. Error: {e}")
+        print(f"An unexpected error occurred while sending DM to {member.name}: {e}")
 
-@bot.command()
-@commands.has_role(ADMIN_ROLE_ID)
-async def update_all_users(ctx):
-    if ctx.guild.id != GUILD_ID:
-        return
+# Start the periodic check on bot startup
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user.name} ({bot.user.id})")
+    periodic_check.start()
 
-    print(f"Updating all users in the server...")
-    for member in ctx.guild.members:
-        if not member.bot:
-            try:
-                github_username = await fetch_github_username(member)
-                if github_username:
-                    is_contributor = await check_github_contributor(github_username)
-                    if is_contributor:
-                        await handle_contributor(member, github_username)
-                    else:
-                        await member.send(
-                            f"Hi {member.name}, it looks like your GitHub account is not linked as a contributor to the repository. "
-                            f"Please check your GitHub account or link it again. Click this link to authorize: {AUTHORIZATION_URL}"
-                        )
-                else:
-                    await member.send(
-                        f"Hi {member.name}, we couldn't find your GitHub username. Please link your GitHub account to get the Contributor role. "
-                        f"Click this link to authorize: {AUTHORIZATION_URL}"
-                    )
-            except discord.Forbidden:
-                print(f"Failed to DM {member.name}. They may have DMs disabled.")
-            except Exception as e:
-                print(f"An error occurred with user {member.name}: {e}")
+@bot.command(name="link")
+async def link(ctx: commands.Context):
+    embed = EmbedBuilder.DefaultEmbed(title="Github Linking", description="Are you a contributor? Link your github account to get your role! ")
+    view = discord.ui.View()
+    button = discord.ui.Button(label="Link", style=discord.ButtonStyle.link, url=AUTHORIZATION_URL)
+    view.add_item(button)
 
-    await ctx.send("All users have been updated.")
-
-# Error handler for the update_all_users command
-@update_all_users.error
-async def update_all_users_error(ctx, error):
-    if isinstance(error, commands.CheckFailure):
-        await ctx.send("You do not have permission to use this command.")
-    else:
-        await ctx.send(f"An error occurred: {error}")
+    # Send DM to new member asking them to link their GitHub account
+    user = ctx.author
+    try:
+        await user.send(embed = embed, view = view)
+        await ctx.send("Please check your dms.")
+    except discord.Forbidden:
+        print(f"{ctx.author.name}´s DMs are most likely closed!")
 
 if __name__ == "__main__":
     bot.run(TOKEN)

@@ -5,5 +5,6 @@ The WinUtil Bot is licensed under the MIT License. It has been developed and mai
 
 
 # Contributors:
- - real_mullac
- - FallenGME
+ - @Real_MullaC
+ - @FallenGME
+ - @og-mrk

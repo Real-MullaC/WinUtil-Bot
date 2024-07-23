@@ -20,6 +20,10 @@ CHECK_INTERVAL = 10  # Time in seconds to wait between checks
 ADMIN_ROLE_ID = os.getenv('ADMIN_ROLE_ID')
 AUTHORIZATION_URL = "https://discord.com/oauth2/authorize?client_id=1264587568117448811&response_type=code&redirect_uri=http%3A%2F%2Fbotworks.callums.live%2Fapi%2Foauth2%2Fcallback&scope=identify+connections"
 
+TEMP_VOICE_CATEGORY_ID = int(os.getenv('TEMP_VOICE_CATEGORY_ID'))
+TEMP_VOICE_CHANNEL_ID = int(os.getenv('TEMP_VOICE_CHANNEL_ID'))
+TEMP_VOICE_DEST_CATEGORY_ID = int(os.getenv('TEMP_VOICE_DEST_CATEGORY_ID'))
+
 # Initialize bot with all intents enabled
 intents = discord.Intents().all()
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -126,6 +130,33 @@ async def on_member_join(member):
         print(f"Failed to DM {member.name}. They may have DMs disabled.")
     except Exception as e:
         print(f"An unexpected error occurred while sending DM to {member.name}: {e}")
+
+#Handle TempVoice Logic whenever a member joins or leaves a voice channel
+@bot.event
+async def on_voice_state_update(member, before, after):
+    # Check for Environment Variables before continuing on the function
+    if (TEMP_VOICE_DEST_CATEGORY_ID == None or TEMP_VOICE_DEST_CATEGORY_ID) == 0 and (TEMP_VOICE_CATEGORY_ID == None or TEMP_VOICE_CATEGORY_ID == 0) and (TEMP_VOICE_CHANNEL_ID == None or TEMP_VOICE_CHANNEL_ID == 0):
+        print(f"TempVoice Feature is not configured, therefore it won't work in this bot")
+        return
+
+    # Make sure this feature only works on WinUtil Server, and only at specific channel & category
+    if member.guild.id != GUILD_ID:
+        return
+
+    if after.channel == None or before == after:
+        return
+
+    if not (after.channel.id == TEMP_VOICE_CHANNEL_ID and after.channel.category.id == TEMP_VOICE_CATEGORY_ID):
+        return
+
+    try:
+        category = discord.utils.get(member.guild.categories, id=TEMP_VOICE_DEST_CATEGORY_ID)
+        created_vc = await category.create_voice_channel(f"{member.nick}'s VC")
+        print(f"Created Voice Channel, name: {created_vc.name}")
+        await member.move_to(created_vc)
+        print(f"Moved member {member.name} to Voice Channel {created_vc.name}")
+    except Exception as e:
+        print(f"An unexpected error occurred while handling VoiceTemp logic to {member.name}: {e}")
 
 # Start the periodic check on bot startup
 @bot.event

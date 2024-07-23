@@ -42,6 +42,10 @@ async def fetch_user_records():
 
 # Function to update user roles based on records
 async def update_user_roles():
+    if not CONTRIBUTOR_ROLE_ID:
+        print(f"The Contributor Role ID (CONTRIBUTOR_ROLE_ID) is not set in .env file, please set it up correctly if you wish to use this bot feature")
+        return
+
     user_records = await fetch_user_records()  # Fetch user records from the web server
     required_guild = 0
     for guild in bot.guilds:
@@ -70,6 +74,7 @@ async def update_user_roles():
         try:
             role = discord.utils.get(guild.roles, id=CONTRIBUTOR_ROLE_ID)
             if not role:
+                print(f"Did not find role with id {CONTRIBUTOR_ROLE_ID}, please double check your .env file")
                 continue
             if role not in member.roles:
                 await member.add_roles(role)

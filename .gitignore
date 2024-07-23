@@ -6,3 +6,4 @@ __pycache__/
 .env
 
 # Optional: Exclude other files or directories if necessary
+start.bat

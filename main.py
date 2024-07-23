@@ -13,11 +13,11 @@ load_dotenv()
 # Load environment variables
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 GUILD_ID = int(os.getenv('DISCORD_GUILD_ID'))
+
 CONTRIBUTOR_ROLE_ID = int(os.getenv('CONTRIBUTOR_ROLE_ID'))
 WEB_SERVER_URL = os.getenv('WEB_SERVER_URL')
 CHECK_INTERVAL = 10  # Time in seconds to wait between checks
 ADMIN_ROLE_ID = os.getenv('ADMIN_ROLE_ID')
-
 AUTHORIZATION_URL = "https://discord.com/oauth2/authorize?client_id=1264587568117448811&response_type=code&redirect_uri=http%3A%2F%2Fbotworks.callums.live%2Fapi%2Foauth2%2Fcallback&scope=identify+connections"
 
 # Initialize bot with all intents enabled
@@ -43,34 +43,44 @@ async def fetch_user_records():
 # Function to update user roles based on records
 async def update_user_roles():
     user_records = await fetch_user_records()  # Fetch user records from the web server
+    required_guild = 0
     for guild in bot.guilds:
         if guild.id == GUILD_ID:
-            for member in guild.members:
-                await asyncio.sleep(delay=2)
-                if not member.bot:
-                    user_record = user_records.get(str(member.id))
-                    if user_record:
-                        new_nickname = user_record.get('github_username')
-                        try:
-                            await member.edit(nick=new_nickname)
-                            print(f"Updated nickname of {member.name} to {new_nickname} [TEMPORARY]")
-                        except Exception as e:
-                            print(f"An unexpected error occurred while updating {member.name}: {e}")
+            required_guild = guild
+            break
 
-                        if user_record.get('contributor') and user_record.get('contributor') == True:
-                            try:
-                                role = discord.utils.get(guild.roles, id=CONTRIBUTOR_ROLE_ID)
-                                if role:
-                                    if role not in member.roles:
-                                        await member.add_roles(role)
-                                        # Only print message if the role was added
-                                        print(f"Added 'Contributor' role to {member.name}")
-                            except discord.Forbidden:
-                                print(f"Permission error while updating {member.name}.")
-                            except discord.HTTPException as e:
-                                print(f"HTTP error occurred while updating {member.name}: {e}")
-                            except Exception as e:
-                                print(f"An unexpected error occurred while updating {member.name}: {e}")
+    for member in required_guild.members:
+        await asyncio.sleep(delay=2)
+        if member.bot:
+            continue
+
+        user_record = user_records.get(str(member.id))
+        if not user_record:
+            continue
+
+        new_nickname = user_record.get('github_username')
+        try:
+            await member.edit(nick=new_nickname)
+            print(f"Updated nickname of {member.name} to {new_nickname} [TEMPORARY]")
+        except Exception as e:
+            print(f"An unexpected error occurred while updating {member.name}: {e}")
+
+        if not (user_record.get('contributor') and user_record.get('contributor') == True):
+            continue
+        try:
+            role = discord.utils.get(guild.roles, id=CONTRIBUTOR_ROLE_ID)
+            if not role:
+                continue
+            if role not in member.roles:
+                await member.add_roles(role)
+                # Only print message if the role was added
+                print(f"Added 'Contributor' role to {member.name}")
+        except discord.Forbidden:
+            print(f"Permission error while updating {member.name}.")
+        except discord.HTTPException as e:
+            print(f"HTTP error occurred while updating {member.name}: {e}")
+        except Exception as e:
+            print(f"An unexpected error occurred while updating {member.name}: {e}")
 
 # Command to manually update roles
 @bot.command(name='update_roles')

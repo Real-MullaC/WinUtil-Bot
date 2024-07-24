@@ -23,10 +23,28 @@ AUTHORIZATION_URL = "https://discord.com/oauth2/authorize?client_id=126458756811
 TEMP_VOICE_CATEGORY_ID = int(os.getenv('TEMP_VOICE_CATEGORY_ID'))
 TEMP_VOICE_CHANNEL_ID = int(os.getenv('TEMP_VOICE_CHANNEL_ID'))
 TEMP_VOICE_DEST_CATEGORY_ID = int(os.getenv('TEMP_VOICE_DEST_CATEGORY_ID'))
+created_voice_channels = []
+
 
 # Initialize bot with all intents enabled
 intents = discord.Intents().all()
 bot = commands.Bot(command_prefix='!', intents=intents)
+guild = None
+
+async def update_server_guild():
+    global guild
+    guild = bot.get_guild(GUILD_ID)
+
+# Command to manually update guild
+@bot.command(name='update_guild')
+@commands.has_role(ADMIN_ROLE_ID)  # Ensure only users with the admin role can run this command
+async def update_guild(ctx):
+    await ctx.send("Starting the guild update process...")
+    try:
+        await update_server_guild()
+        await ctx.send("Guild update process completed.")
+    except Exception as e:
+        await ctx.send(f"An error occurred while updating guild: {e}")
 
 # Function to fetch user records from the web server
 async def fetch_user_records():
@@ -100,7 +118,7 @@ async def update_roles(ctx):
         await update_user_roles()
         await ctx.send("Role update process completed.")
     except Exception as e:
-        await ctx.send(f"An error occurred: {e}")
+        await ctx.send(f"An error occurred while updating roles: {e}")
 
 # Periodically check for updates
 @tasks.loop(seconds=CHECK_INTERVAL)
@@ -134,17 +152,43 @@ async def on_member_join(member):
 #Handle TempVoice Logic whenever a member joins or leaves a voice channel
 @bot.event
 async def on_voice_state_update(member, before, after):
-    # Check for Environment Variables before continuing on the function
-    if (TEMP_VOICE_DEST_CATEGORY_ID == None or TEMP_VOICE_DEST_CATEGORY_ID) == 0 and (TEMP_VOICE_CATEGORY_ID == None or TEMP_VOICE_CATEGORY_ID == 0) and (TEMP_VOICE_CHANNEL_ID == None or TEMP_VOICE_CHANNEL_ID == 0):
-        print(f"TempVoice Feature is not configured, therefore it won't work in this bot")
+    if not is_temp_voice_configured():
         return
 
     # Make sure this feature only works on WinUtil Server, and only at specific channel & category
     if member.guild.id != GUILD_ID:
         return
 
-    if after.channel == None or before == after:
+    if  before == after:
         return
+
+    if not before.channel == None:
+        if before.channel.id in created_voice_channels:
+            print(f"Found member {member.name} (member.nick) has left a Voice Channel (channel name: {before.channel.name}, channel ID: {before.channel.id}) that was created by this bot")
+            # If the voice channel is empty
+            if before.channel.members == []:
+                try:
+                    msg = f"Deleting Voice channel {before.channel.name}, because it was created by {bot.user.name}, and the voice channel is empty."
+                    print(msg)
+                    await before.channel.delete(reason=msg)
+                    # Only remove Voice Channel upon successful deletion of Voice Channel
+                    vc_index = created_voice_channels.index(before.channel.id)
+                    created_voice_channels.pop(vc_index)
+                except discord.Forbidden:
+                    print(f"{bot.user.name} could not delete voice channel (channel name: {before.channel.name}, channel ID: {before.channel.id}), discord.Forbidden exception was thrown.")
+                except discord.NotFound:
+                    print(f"{bot.user.name} could not find voice channel (channel name: {before.channel.name}, channel ID: {before.channel.id}) when trying to delete it, discord.NotFound exception was thrown.")
+                except discord.HTTPException:
+                    print(f"{bot.user.name} could not delete voice channel (channel name: {before.channel.name}, channel ID: {before.channel.id}), failed to do so, discord.HTTPException exception was thrown.")
+                except Exception as e:
+                    print(f"{bot.user.name} could not delete voice channel (channel name: {before.channel.name}, channel ID: {before.channel.id}), for any reason: {e}")
+
+                # Print the list for debug info
+                print(f"Current List of Voice Channel(s): {created_voice_channels})")
+
+    # after.channel being a None value is when a User leaves a Voice Channel
+    if after.channel == None:
+        return # Do an Early Return, as the next steps require after.channel to be not a None Value
 
     if not (after.channel.id == TEMP_VOICE_CHANNEL_ID and after.channel.category.id == TEMP_VOICE_CATEGORY_ID):
         return
@@ -152,16 +196,82 @@ async def on_voice_state_update(member, before, after):
     try:
         category = discord.utils.get(member.guild.categories, id=TEMP_VOICE_DEST_CATEGORY_ID)
         created_vc = await category.create_voice_channel(f"{member.nick}'s VC")
+        # Only print info & add new voice channel to list if the voice channel was created successfully
+        created_voice_channels.append(created_vc.id)
         print(f"Created Voice Channel, name: {created_vc.name}")
         await member.move_to(created_vc)
         print(f"Moved member {member.name} to Voice Channel {created_vc.name}")
     except Exception as e:
         print(f"An unexpected error occurred while handling VoiceTemp logic to {member.name}: {e}")
 
+# Check for Environment Variables on Temp Voice, returns True if it's configured, else False
+def is_temp_voice_configured():
+    if (TEMP_VOICE_DEST_CATEGORY_ID == None or TEMP_VOICE_DEST_CATEGORY_ID) == 0 and (TEMP_VOICE_CATEGORY_ID == None or TEMP_VOICE_CATEGORY_ID == 0) and (TEMP_VOICE_CHANNEL_ID == None or TEMP_VOICE_CHANNEL_ID == 0):
+        print(f"TempVoice Feature is not configured, therefore it won't work in this bot")
+        return False
+    return True
+
+# A function that updates the state of Voice Channels created by this bot, while it's currently running.. and before it ran.
+async def update_server_temp_voice_state():
+    if not is_temp_voice_configured():
+        return
+
+    if guild == None:
+        print(f"Guild is None")
+        return
+
+    if guild.id != GUILD_ID:
+        return
+
+    try:
+        category = discord.utils.get(guild.categories, id=TEMP_VOICE_DEST_CATEGORY_ID)
+    except Exception as e:
+        print(f"An unexpected error occurred while updating VoiceTemp State: {e}")
+        return
+
+    for voice_channel in category.voice_channels:
+        if voice_channel.members == []:
+            try:
+                msg = f"Deleting Voice channel {voice_channel.name}, because it was created by {bot.user.name}, and the voice channel is empty."
+                print(msg)
+                await voice_channel.delete(reason=msg)
+                # This's just to make sure that the state is up-to-date
+                if voice_channel.id in created_voice_channels:
+                    index = created_voice_channels.index(voice_channel.id)
+                    created_voice_channels.pop(index)
+            except discord.Forbidden:
+                print(f"{bot.user.name} could not delete voice channel (channel name: {voice_channel.name}, channel ID: {voice_channel.id}), discord.Forbidden exception was thrown.")
+            except discord.NotFound:
+                print(f"{bot.user.name} could not find voice channel (channel name: {voice_channel.name}, channel ID: {voice_channel.id}) when trying to delete it, discord.NotFound exception was thrown.")
+            except discord.HTTPException:
+                print(f"{bot.user.name} could not delete voice channel (channel name: {voice_channel.name}, channel ID: {voice_channel.id}), failed to do so, discord.HTTPException exception was thrown.")
+            except Exception as e:
+                print(f"{bot.user.name} could not delete voice channel (channel name: {voice_channel.name}, channel ID: {voice_channel.id}), for any reason: {e}")
+        else:
+            created_voice_channels.append(voice_channel.id)
+
+# Command to manually update guild
+@bot.command(name='update_temp_voice_state')
+@commands.has_role(ADMIN_ROLE_ID)  # Ensure only users with the admin role can run this command
+async def update_temp_voice_state(ctx):
+    await ctx.send("Starting the TempVoice State update process...")
+    try:
+        await update_server_temp_voice_state()
+        await ctx.send("TempVoice State update process completed.")
+    except Exception as e:
+        await ctx.send(f"An error occurred while updating TempVoice State: {e}")
+
 # Start the periodic check on bot startup
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name} ({bot.user.id})")
+
+    print("Updating Guild")
+    await update_server_guild()
+
+    print("Updating TempVoice State")
+    await update_server_temp_voice_state()
+
     periodic_check.start()
 
 @bot.command(name="link")
